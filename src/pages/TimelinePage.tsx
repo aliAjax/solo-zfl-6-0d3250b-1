@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,6 +12,9 @@ import {
   X,
   Edit3,
   Trash2,
+  Play,
+  Pause,
+  Square,
 } from 'lucide-react';
 import { useWritingSystemStore } from '@/store/useWritingSystemStore';
 import { ShapeRenderer, GlyphRenderer } from '@/components/GlyphRenderer';
@@ -74,6 +77,83 @@ export const TimelinePage: React.FC = () => {
   const gotoStage = (dir: -1 | 1) => {
     const nextIdx = Math.max(0, Math.min(sortedStages.length - 1, currentStageIndex + dir));
     if (nextIdx >= 0) selectStage(sortedStages[nextIdx].id);
+  };
+
+  // —— 自动播放 ——
+  const PLAYBACK_INTERVAL = 1600;
+  const [isPlaying, setIsPlaying] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stageNodeRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  const currentStage = currentStageIndex >= 0 ? sortedStages[currentStageIndex] : undefined;
+
+  const clearPlayTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const stopPlayback = (resetToFirst: boolean) => {
+    clearPlayTimer();
+    setIsPlaying(false);
+    if (resetToFirst && sortedStages.length > 0) {
+      selectStage(sortedStages[0].id);
+    }
+  };
+
+  const togglePlayback = () => {
+    if (!selectedRadical || sortedStages.length === 0) return;
+    if (isPlaying) {
+      setIsPlaying(false);
+      return;
+    }
+    // 已停在最后一个阶段时再次播放，从头开始
+    if (currentStageIndex >= sortedStages.length - 1 || currentStageIndex < 0) {
+      selectStage(sortedStages[0].id);
+    }
+    setIsPlaying(true);
+  };
+
+  // 按阶段顺序推进；依赖变化（选阶段/换字根/阶段增删）时重新计时
+  useEffect(() => {
+    if (!isPlaying || !selectedRadicalId) return;
+    if (currentStageIndex < 0 || currentStageIndex >= sortedStages.length - 1) {
+      setIsPlaying(false);
+      return;
+    }
+    timerRef.current = setTimeout(() => {
+      selectStage(sortedStages[currentStageIndex + 1].id);
+    }, PLAYBACK_INTERVAL);
+    return clearPlayTimer;
+  }, [isPlaying, currentStageIndex, selectedRadicalId, sortedStages, selectStage]);
+
+  // 播放时把当前阶段圆点滚动到可视区
+  useEffect(() => {
+    if (!isPlaying) return;
+    stageNodeRefs.current.get(selectedStageId ?? '')?.scrollIntoView({
+      behavior: 'smooth',
+      inline: 'center',
+      block: 'nearest',
+    });
+  }, [isPlaying, selectedStageId]);
+
+  // 卸载时清理定时器
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    []
+  );
+
+  const handleSelectRadical = (id: string | null) => {
+    selectRadical(id);
+    if (!id) {
+      stopPlayback(false);
+    } else if (isPlaying && sortedStages.length > 0) {
+      // 播放中切换字根：从第一个阶段重新播放新字根
+      selectStage(sortedStages[0].id);
+    }
   };
 
   const handleAddStage = () => {
@@ -181,6 +261,10 @@ export const TimelinePage: React.FC = () => {
                 return (
                   <React.Fragment key={st.id}>
                     <button
+                      ref={(node) => {
+                        if (node) stageNodeRefs.current.set(st.id, node);
+                        else stageNodeRefs.current.delete(st.id);
+                      }}
                       onClick={() => selectStage(st.id)}
                       className={`flex flex-col items-center gap-2 shrink-0 min-w-[110px] transition-all duration-300 ${
                         isActive ? 'scale-110' : 'hover:scale-105'
@@ -473,7 +557,7 @@ export const TimelinePage: React.FC = () => {
                   return (
                     <button
                       key={r.id}
-                      onClick={() => selectRadical(isActive ? null : r.id)}
+                      onClick={() => handleSelectRadical(isActive ? null : r.id)}
                       className={`w-full flex items-center gap-3 p-2.5 rounded-xl transition-all duration-200 text-left ${
                         isActive
                           ? 'bg-vermilion-500/15 border border-vermilion-500/40'
@@ -527,6 +611,73 @@ export const TimelinePage: React.FC = () => {
                   <span className="px-4 py-1.5 rounded-xl bg-bronze-400/15 text-bronze-500 font-kai border border-bronze-400/20">
                     {selectedRadical.category}字
                   </span>
+                </div>
+
+                {/* 自动播放控制条 */}
+                <div className="flex items-center gap-4 p-4 mb-6 rounded-2xl bg-parchment-100/50 border border-parchment-300/50">
+                  <button
+                    onClick={togglePlayback}
+                    disabled={sortedStages.length === 0}
+                    className={`shrink-0 flex items-center gap-2 px-5 py-2.5 rounded-xl font-kai text-sm text-parchment-50 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 shadow-seal ${
+                      isPlaying ? 'bg-bronze-500 hover:bg-bronze-400' : 'bg-vermilion-500 hover:bg-vermilion-600'
+                    }`}
+                  >
+                    {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+                    {isPlaying ? '暂停' : '播放'}
+                  </button>
+                  <button
+                    onClick={() => stopPlayback(true)}
+                    disabled={!isPlaying && currentStageIndex <= 0}
+                    className="shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl font-kai text-sm bg-ink-300/15 text-ink-400 hover:bg-ink-300/25 hover:text-ink-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="停止并回到第一个阶段"
+                  >
+                    <Square size={15} />
+                    停止
+                  </button>
+
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className={`shrink-0 w-12 h-12 rounded-lg bg-parchment-50 shadow-inner flex items-center justify-center transition-all duration-300 ${
+                        isPlaying ? 'ring-2 ring-vermilion-500/60 scale-105' : ''
+                      }`}
+                    >
+                      <GlyphRenderer radical={selectedRadical} stageId={selectedStageId} size={40} strokeWidth={2} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-kai text-base font-bold text-ink-500 flex items-center gap-2">
+                        {currentStage ? currentStage.name : '—'}
+                        {isPlaying && (
+                          <span className="flex items-center gap-1 text-[10px] font-song text-vermilion-500 bg-vermilion-500/10 px-1.5 py-0.5 rounded">
+                            <span className="w-1.5 h-1.5 rounded-full bg-vermilion-500 animate-pulse" />
+                            播放中
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-ink-300 font-song truncate">
+                        {currentStage?.description || '暂无阶段说明'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="ml-auto shrink-0 font-song text-xs text-ink-300">
+                    {sortedStages.length > 0 ? `${currentStageIndex + 1} / ${sortedStages.length}` : '0 / 0'}
+                  </div>
+                  <div className="shrink-0 flex items-center gap-1.5 max-w-[180px]">
+                    {sortedStages.map((st, idx) => (
+                      <button
+                        key={st.id}
+                        onClick={() => selectStage(st.id)}
+                        title={st.name}
+                        className={`h-2 rounded-full transition-all duration-300 ${
+                          idx === currentStageIndex
+                            ? 'w-6 bg-vermilion-500'
+                            : idx < currentStageIndex
+                            ? 'w-2 bg-bronze-400 hover:bg-bronze-500'
+                            : 'w-2 bg-parchment-300 hover:bg-ink-200'
+                        }`}
+                      />
+                    ))}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -607,7 +758,12 @@ export const TimelinePage: React.FC = () => {
                     >
                       <div />
                       {sortedStages.map((st) => (
-                        <div key={st.id} className="text-center">
+                        <div
+                          key={st.id}
+                          className={`text-center rounded-lg py-1 transition-colors duration-300 ${
+                            isPlaying && st.id === selectedStageId ? 'bg-vermilion-500/10' : ''
+                          }`}
+                        >
                           <div
                             className="font-kai text-sm font-bold"
                             style={{ color: st.color }}
@@ -625,10 +781,15 @@ export const TimelinePage: React.FC = () => {
                       <div className="font-kai text-xs text-ink-300 text-right pr-2">字形</div>
                       {sortedStages.map((st) => {
                         const variant = getVariantForStage(selectedRadical, st.id);
+                        const isCurrentColumn = isPlaying && st.id === selectedStageId;
                         return (
                           <div
                             key={st.id}
-                            className="aspect-square bg-parchment-100/50 rounded-xl p-2 flex items-center justify-center border border-parchment-300/30"
+                            className={`aspect-square bg-parchment-100/50 rounded-xl p-2 flex items-center justify-center border transition-colors duration-300 ${
+                              isCurrentColumn
+                                ? 'border-vermilion-500/60 bg-vermilion-500/5'
+                                : 'border-parchment-300/30'
+                            }`}
                           >
                             {variant ? (
                               <ShapeRenderer
