@@ -54,6 +54,7 @@ export interface WritingSystemActions {
   addStage: (s: Omit<HistoricalStage, 'id'>) => void;
   updateStage: (id: string, patch: Partial<HistoricalStage>) => void;
   removeStage: (id: string) => void;
+  reorderStage: (id: string, toIndex: number) => void;
 
   addRadical: (r: Omit<Radical, 'id' | 'createdAt' | 'updatedAt'>) => string;
   updateRadical: (id: string, patch: Partial<Radical>) => void;

@@ -1,8 +1,38 @@
-import React, { useMemo } from 'react';
-import { ChevronLeft, ChevronRight, BookMarked, Layers } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  BookMarked,
+  Layers,
+  Settings2,
+  Plus,
+  Check,
+  X,
+  Edit3,
+  Trash2,
+} from 'lucide-react';
 import { useWritingSystemStore } from '@/store/useWritingSystemStore';
 import { ShapeRenderer, GlyphRenderer } from '@/components/GlyphRenderer';
 import { getVariantForStage } from '@/utils/glyphUtils';
+import type { HistoricalStage } from '@/types';
+
+const STAGE_COLOR_PALETTE = ['#8B5A2B', '#6B8E6B', '#556B8B', '#3E2723', '#5D7A6F', '#9C6B3A', '#7A4E5E', '#4F6B5A'];
+
+type StageDraft = {
+  name: string;
+  order: number;
+  description: string;
+  color: string;
+};
+
+const emptyDraft = (nextPos: number): StageDraft => ({
+  name: '',
+  order: nextPos,
+  description: '',
+  color: STAGE_COLOR_PALETTE[0],
+});
 
 export const TimelinePage: React.FC = () => {
   const stages = useWritingSystemStore((s) => s.stages);
@@ -11,11 +41,31 @@ export const TimelinePage: React.FC = () => {
   const selectedRadicalId = useWritingSystemStore((s) => s.selectedRadicalId);
   const selectStage = useWritingSystemStore((s) => s.selectStage);
   const selectRadical = useWritingSystemStore((s) => s.selectRadical);
+  const addStage = useWritingSystemStore((s) => s.addStage);
+  const updateStage = useWritingSystemStore((s) => s.updateStage);
+  const removeStage = useWritingSystemStore((s) => s.removeStage);
+  const reorderStage = useWritingSystemStore((s) => s.reorderStage);
+
+  const [manageOpen, setManageOpen] = useState(false);
+  const [draft, setDraft] = useState<StageDraft>(() => emptyDraft(stages.length + 1));
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<StageDraft>(emptyDraft(1));
 
   const sortedStages = useMemo(
     () => [...stages].sort((a, b) => a.order - b.order),
     [stages]
   );
+
+  // 按阶段统计字形变体总数
+  const variantCountByStage = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of radicals) {
+      for (const v of r.variants) {
+        if (v.svgPath) counts.set(v.stageId, (counts.get(v.stageId) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [radicals]);
 
   const selectedRadical = radicals.find((r) => r.id === selectedRadicalId);
 
@@ -26,16 +76,87 @@ export const TimelinePage: React.FC = () => {
     if (nextIdx >= 0) selectStage(sortedStages[nextIdx].id);
   };
 
+  const handleAddStage = () => {
+    const name = draft.name.trim();
+    if (!name) {
+      alert('请填写阶段名称');
+      return;
+    }
+    addStage({
+      name,
+      order: Math.max(1, Math.min(sortedStages.length + 1, Math.round(draft.order) || 1)) - 1,
+      description: draft.description.trim(),
+      color: draft.color,
+    });
+    setDraft(emptyDraft(sortedStages.length + 2));
+  };
+
+  const startEdit = (st: HistoricalStage, index: number) => {
+    setEditingId(st.id);
+    setEditDraft({ name: st.name, order: index + 1, description: st.description, color: st.color });
+  };
+
+  const commitEdit = () => {
+    if (!editingId) return;
+    const name = editDraft.name.trim();
+    if (!name) {
+      alert('请填写阶段名称');
+      return;
+    }
+    const index = sortedStages.findIndex((st) => st.id === editingId);
+    const desired = Math.max(1, Math.min(sortedStages.length, Math.round(editDraft.order) || index + 1)) - 1;
+    if (desired !== index) reorderStage(editingId, desired);
+    updateStage(editingId, {
+      name,
+      description: editDraft.description.trim(),
+      color: editDraft.color,
+    });
+    setEditingId(null);
+  };
+
+  const handleRemove = (st: HistoricalStage) => {
+    const count = variantCountByStage.get(st.id) || 0;
+    const msg =
+      count > 0
+        ? `确定移除阶段「${st.name}」吗？\n该阶段下的 ${count} 个字形变体将一并清除，此操作无法撤销。`
+        : `确定移除阶段「${st.name}」吗？此操作无法撤销。`;
+    if (confirm(msg)) {
+      removeStage(st.id);
+      if (editingId === st.id) setEditingId(null);
+    }
+  };
+
   return (
     <div className="container mx-auto px-6 py-8">
-      <div className="mb-8 animate-fade-up">
-        <h2 className="text-3xl font-kai text-ink-500 font-bold tracking-wider flex items-center gap-3 mb-2">
-          <Layers className="text-bronze-400" size={28} />
-          演化时间线
-        </h2>
-        <p className="text-ink-300 font-song text-sm">
-          穿越 <span className="text-bronze-500 font-bold">{sortedStages.length}</span> 个历史阶段，见证每一个字形的演变历程
-        </p>
+      <div className="mb-8 animate-fade-up flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-kai text-ink-500 font-bold tracking-wider flex items-center gap-3 mb-2">
+            <Layers className="text-bronze-400" size={28} />
+            演化时间线
+          </h2>
+          <p className="text-ink-300 font-song text-sm">
+            穿越 <span className="text-bronze-500 font-bold">{sortedStages.length}</span> 个历史阶段，见证每一个字形的演变历程
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            setManageOpen((v) => {
+              if (!v) {
+                setDraft(emptyDraft(stages.length + 1));
+                setEditingId(null);
+              }
+              return !v;
+            });
+          }}
+          className={`shrink-0 flex items-center gap-2 px-5 py-2.5 rounded-xl font-kai text-sm transition-all border-2 ${
+            manageOpen
+              ? 'bg-vermilion-500 text-parchment-50 border-vermilion-600/40 shadow-seal'
+              : 'bg-parchment-50 text-ink-400 border-parchment-300/50 shadow-scroll hover:border-vermilion-500/40 hover:text-vermilion-500'
+          }`}
+        >
+          <Settings2 size={16} />
+          阶段管理
+        </button>
       </div>
 
       <div className="relative mb-10 animate-fade-up" style={{ animationDelay: '100ms' }}>
@@ -134,6 +255,208 @@ export const TimelinePage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {manageOpen && (
+        <div className="mb-10 animate-fade-up" style={{ animationDelay: '60ms' }}>
+          <div className="bg-parchment-50 rounded-2xl p-6 shadow-scroll border border-parchment-300/40">
+            <div className="flex items-center justify-between mb-5 pb-3 border-b-2 border-dashed border-parchment-300/60">
+              <h3 className="font-kai text-xl text-ink-500 font-bold flex items-center gap-2">
+                <span className="w-1.5 h-6 rounded bg-vermilion-500" />
+                历史阶段管理
+              </h3>
+              <span className="text-xs font-song text-ink-300 bg-parchment-100/60 px-3 py-1 rounded-lg">
+                共 {sortedStages.length} 个阶段 · 改动即时生效
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* 新增阶段 */}
+              <div className="lg:col-span-1">
+                <div className="rounded-xl border border-bronze-400/30 bg-bronze-400/5 p-4 space-y-3.5 h-full">
+                  <div className="font-kai text-sm text-bronze-500 font-bold flex items-center gap-1.5">
+                    <Plus size={15} />
+                    新增阶段
+                  </div>
+                  <div>
+                    <label className="block font-kai text-xs text-ink-400 mb-1">名称 <span className="text-vermilion-500">*</span></label>
+                    <input
+                      value={draft.name}
+                      onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddStage()}
+                      placeholder="如：简牍隶书"
+                      className="w-full px-3 py-2 rounded-lg bg-parchment-100/60 border border-parchment-300/50 text-ink-500 font-kai text-sm placeholder-ink-200 focus:outline-none focus:ring-2 focus:ring-vermilion-500/30"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-kai text-xs text-ink-400 mb-1">顺序（第几位）</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={sortedStages.length + 1}
+                      value={draft.order}
+                      onChange={(e) => setDraft({ ...draft, order: Number(e.target.value) })}
+                      className="w-full px-3 py-2 rounded-lg bg-parchment-100/60 border border-parchment-300/50 text-ink-500 font-song text-sm focus:outline-none focus:ring-2 focus:ring-vermilion-500/30"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-kai text-xs text-ink-400 mb-1">说明</label>
+                    <textarea
+                      value={draft.description}
+                      onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                      rows={2}
+                      placeholder="此阶段字形特征…"
+                      className="w-full px-3 py-2 rounded-lg bg-parchment-100/60 border border-parchment-300/50 text-ink-500 font-song text-sm placeholder-ink-200 focus:outline-none focus:ring-2 focus:ring-vermilion-500/30 resize-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-kai text-xs text-ink-400 mb-1.5">标识色</label>
+                    <ColorSwatches value={draft.color} onChange={(color) => setDraft({ ...draft, color })} />
+                  </div>
+                  <button
+                    onClick={handleAddStage}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 bg-bronze-400 hover:bg-bronze-500 text-parchment-50 rounded-lg font-kai text-sm transition-all hover:scale-[1.01] active:scale-[0.99]"
+                  >
+                    <Plus size={16} />
+                    添加阶段
+                  </button>
+                </div>
+              </div>
+
+              {/* 已有阶段 */}
+              <div className="lg:col-span-2">
+                {sortedStages.length === 0 ? (
+                  <div className="h-full min-h-[160px] flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-parchment-300/60 bg-parchment-100/30">
+                    <div className="text-4xl mb-2 opacity-30">🏺</div>
+                    <p className="font-kai text-ink-300 text-sm">尚无历史阶段，先在左侧添加一个吧</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {sortedStages.map((st, idx) => {
+                      const isEditing = editingId === st.id;
+                      const variantCount = variantCountByStage.get(st.id) || 0;
+                      const d = isEditing ? editDraft : null;
+                      return (
+                        <div
+                          key={st.id}
+                          className={`rounded-xl border p-3.5 transition-all ${
+                            isEditing
+                              ? 'border-vermilion-500/50 shadow-md bg-parchment-50'
+                              : 'border-parchment-300/40 bg-parchment-100/30 hover:bg-parchment-100/60'
+                          }`}
+                        >
+                          {isEditing && d ? (
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-3">
+                                <span className="shrink-0 w-8 text-center font-kai text-sm text-ink-300">{idx + 1}</span>
+                                <input
+                                  value={d.name}
+                                  onChange={(e) => setEditDraft({ ...d, name: e.target.value })}
+                                  onKeyDown={(e) => e.key === 'Enter' && commitEdit()}
+                                  placeholder="阶段名称"
+                                  className="flex-1 px-3 py-2 rounded-lg bg-white border border-parchment-300 text-ink-500 font-kai text-sm focus:outline-none focus:ring-2 focus:ring-vermilion-500/30"
+                                />
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <label className="font-kai text-xs text-ink-300">序</label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={sortedStages.length}
+                                    value={d.order}
+                                    onChange={(e) => setEditDraft({ ...d, order: Number(e.target.value) })}
+                                    className="w-16 px-2 py-2 rounded-lg bg-white border border-parchment-300 text-ink-500 font-song text-sm text-center focus:outline-none focus:ring-2 focus:ring-vermilion-500/30"
+                                  />
+                                </div>
+                              </div>
+                              <textarea
+                                value={d.description}
+                                onChange={(e) => setEditDraft({ ...d, description: e.target.value })}
+                                rows={2}
+                                placeholder="阶段说明"
+                                className="w-full px-3 py-2 rounded-lg bg-white border border-parchment-300 text-ink-500 font-song text-sm focus:outline-none focus:ring-2 focus:ring-vermilion-500/30 resize-none"
+                              />
+                              <div className="flex items-center justify-between">
+                                <ColorSwatches value={d.color} onChange={(color) => setEditDraft({ ...d, color })} />
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    onClick={commitEdit}
+                                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-vermilion-500 hover:bg-vermilion-600 text-parchment-50 font-kai text-xs transition-all"
+                                  >
+                                    <Check size={13} /> 保存
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingId(null)}
+                                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-ink-200/40 hover:bg-ink-300 text-ink-400 hover:text-parchment-50 font-kai text-xs transition-all"
+                                  >
+                                    <X size={13} /> 取消
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-3">
+                              <div className="shrink-0 flex flex-col">
+                                <button
+                                  onClick={() => reorderStage(st.id, idx - 1)}
+                                  disabled={idx === 0}
+                                  className="text-ink-300 hover:text-vermilion-500 disabled:opacity-25 disabled:cursor-not-allowed transition-colors p-0.5"
+                                  title="上移"
+                                >
+                                  <ChevronUp size={15} />
+                                </button>
+                                <button
+                                  onClick={() => reorderStage(st.id, idx + 1)}
+                                  disabled={idx === sortedStages.length - 1}
+                                  className="text-ink-300 hover:text-vermilion-500 disabled:opacity-25 disabled:cursor-not-allowed transition-colors p-0.5"
+                                  title="下移"
+                                >
+                                  <ChevronDown size={15} />
+                                </button>
+                              </div>
+                              <span
+                                className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-parchment-50 font-kai text-xs font-bold"
+                                style={{ backgroundColor: st.color }}
+                              >
+                                {idx + 1}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-kai text-base font-bold text-ink-500 truncate">{st.name}</span>
+                                  <span className="shrink-0 text-[10px] font-song text-ink-300 bg-parchment-200/60 px-1.5 py-0.5 rounded">
+                                    {variantCount} 变体
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-ink-300 font-song truncate mt-0.5">
+                                  {st.description || '暂无说明'}
+                                </p>
+                              </div>
+                              <div className="shrink-0 flex items-center gap-1.5">
+                                <button
+                                  onClick={() => startEdit(st, idx)}
+                                  className="w-8 h-8 rounded-lg bg-ink-300/15 hover:bg-ink-400 text-ink-400 hover:text-parchment-50 flex items-center justify-center transition-all"
+                                  title="编辑"
+                                >
+                                  <Edit3 size={14} />
+                                </button>
+                                <button
+                                  onClick={() => handleRemove(st)}
+                                  className="w-8 h-8 rounded-lg bg-vermilion-500/15 hover:bg-vermilion-500 text-vermilion-500 hover:text-parchment-50 flex items-center justify-center transition-all"
+                                  title="移除"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
         <div className="xl:col-span-1">
@@ -278,7 +601,10 @@ export const TimelinePage: React.FC = () => {
                 </h4>
                 <div className="overflow-x-auto">
                   <div className="min-w-[600px]">
-                    <div className="grid grid-cols-[80px_repeat(4,1fr)] gap-3 mb-4">
+                    <div
+                      className="grid gap-3 mb-4"
+                      style={{ gridTemplateColumns: `80px repeat(${sortedStages.length}, 1fr)` }}
+                    >
                       <div />
                       {sortedStages.map((st) => (
                         <div key={st.id} className="text-center">
@@ -292,7 +618,10 @@ export const TimelinePage: React.FC = () => {
                       ))}
                     </div>
 
-                    <div className="grid grid-cols-[80px_repeat(4,1fr)] gap-3 items-center mb-2">
+                    <div
+                      className="grid gap-3 items-center mb-2"
+                      style={{ gridTemplateColumns: `80px repeat(${sortedStages.length}, 1fr)` }}
+                    >
                       <div className="font-kai text-xs text-ink-300 text-right pr-2">字形</div>
                       {sortedStages.map((st) => {
                         const variant = getVariantForStage(selectedRadical, st.id);
@@ -316,7 +645,10 @@ export const TimelinePage: React.FC = () => {
                       })}
                     </div>
 
-                    <div className="grid grid-cols-[80px_repeat(4,1fr)] gap-3 items-start">
+                    <div
+                      className="grid gap-3 items-start"
+                      style={{ gridTemplateColumns: `80px repeat(${sortedStages.length}, 1fr)` }}
+                    >
                       <div className="font-kai text-xs text-ink-300 text-right pr-2 pt-1">演变箭头</div>
                       {sortedStages.map((st, idx) => (
                         <div key={st.id} className="flex items-center justify-center gap-1 min-h-[32px]">
@@ -351,3 +683,43 @@ export const TimelinePage: React.FC = () => {
     </div>
   );
 };
+
+const ColorSwatches: React.FC<{ value: string; onChange: (color: string) => void }> = ({
+  value,
+  onChange,
+}) => (
+  <div className="flex items-center gap-1.5 flex-wrap">
+    {STAGE_COLOR_PALETTE.map((c) => (
+      <button
+        key={c}
+        type="button"
+        onClick={() => onChange(c)}
+        className={`w-6 h-6 rounded-full border-2 transition-all ${
+          value.toLowerCase() === c.toLowerCase()
+            ? 'border-vermilion-500 scale-110 shadow-md'
+            : 'border-parchment-50/60 hover:scale-105'
+        }`}
+        style={{ backgroundColor: c }}
+        title={c}
+      />
+    ))}
+    <label
+      className="relative w-6 h-6 rounded-full overflow-hidden cursor-pointer border-2 border-dashed border-ink-200 hover:border-vermilion-500/60 transition-all"
+      title="自定义颜色"
+    >
+      <span
+        className="absolute inset-0"
+        style={{
+          background: 'conic-gradient(#d33, #fc0, #6c3, #09c, #63c, #d33)',
+          opacity: STAGE_COLOR_PALETTE.some((c) => c.toLowerCase() === value.toLowerCase()) ? 0.25 : 1,
+        }}
+      />
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 opacity-0 cursor-pointer"
+      />
+    </label>
+  </div>
+);

@@ -1,10 +1,16 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { WritingSystemStore, Radical, Lexeme, CompositionLayout } from '@/types';
+import type { WritingSystemStore, Radical, Lexeme, CompositionLayout, HistoricalStage } from '@/types';
 import { generateId } from '@/utils/glyphUtils';
 import { MOCK_STAGES, MOCK_RADICALS, MOCK_LEXEMES } from '@/utils/mockData';
 
 const STORAGE_KEY = 'fictional-writing-system-v1';
+
+/** 按 order 升序后重排为连续的 0..n-1，消除顺序重复或缺口 */
+const normalizeStages = (stages: HistoricalStage[]): HistoricalStage[] =>
+  [...stages]
+    .sort((a, b) => a.order - b.order)
+    .map((st, i) => ({ ...st, order: i }));
 
 const getInitialState = () => ({
   stages: MOCK_STAGES,
@@ -22,9 +28,13 @@ export const useWritingSystemStore = create<WritingSystemStore>()(
       ...getInitialState(),
 
       addStage: (s) =>
-        set((state) => ({
-          stages: [...state.stages, { ...s, id: generateId() }].sort((a, b) => a.order - b.order),
-        })),
+        set((state) => {
+          const normalized = normalizeStages(state.stages);
+          const pos = Math.max(0, Math.min(normalized.length, Math.round(s.order) || 0));
+          const newStage: HistoricalStage = { ...s, order: pos, id: generateId() };
+          const next = [...normalized.slice(0, pos), newStage, ...normalized.slice(pos)];
+          return { stages: next.map((st, i) => ({ ...st, order: i })) };
+        }),
 
       updateStage: (id, patch) =>
         set((state) => ({
@@ -32,14 +42,35 @@ export const useWritingSystemStore = create<WritingSystemStore>()(
         })),
 
       removeStage: (id) =>
-        set((state) => ({
-          stages: state.stages.filter((st) => st.id !== id),
-          radicals: state.radicals.map((r) => ({
-            ...r,
-            variants: r.variants.filter((v) => v.stageId !== id),
-          })),
-          selectedStageId: state.selectedStageId === id ? null : state.selectedStageId,
-        })),
+        set((state) => {
+          const normalized = normalizeStages(state.stages);
+          const idx = normalized.findIndex((st) => st.id === id);
+          const stages = normalized.filter((st) => st.id !== id);
+          const selectedStageId =
+            state.selectedStageId === id
+              ? stages[Math.min(Math.max(idx, 0), stages.length - 1)]?.id ?? null
+              : state.selectedStageId;
+          return {
+            stages,
+            radicals: state.radicals.map((r) => ({
+              ...r,
+              variants: r.variants.filter((v) => v.stageId !== id),
+            })),
+            selectedStageId,
+          };
+        }),
+
+      reorderStage: (id, toIndex) =>
+        set((state) => {
+          const normalized = normalizeStages(state.stages);
+          const from = normalized.findIndex((st) => st.id === id);
+          if (from < 0) return state;
+          const target = Math.max(0, Math.min(normalized.length - 1, Math.round(toIndex)));
+          if (target === from) return state;
+          const [moved] = normalized.splice(from, 1);
+          normalized.splice(target, 0, moved);
+          return { stages: normalized.map((st, i) => ({ ...st, order: i })) };
+        }),
 
       addRadical: (r) => {
         const id = generateId();
