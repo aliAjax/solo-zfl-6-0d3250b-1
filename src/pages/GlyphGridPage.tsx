@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Search, Plus, Filter, Tag, Sparkles } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Search, Plus, Filter, Tag, Sparkles, Check, CheckSquare, Square, Trash2, Layers } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useWritingSystemStore } from '@/store/useWritingSystemStore';
 import { GlyphRenderer } from '@/components/GlyphRenderer';
@@ -17,6 +17,7 @@ export const GlyphGridPage: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [checkedIds, setCheckedIds] = useState<string[]>([]);
 
   const filteredRadicals = useMemo(() => {
     return radicals.filter((r) => {
@@ -39,6 +40,42 @@ export const GlyphGridPage: React.FC = () => {
 
   const selectedRadical = radicals.find((r) => r.id === selectedRadicalId);
 
+  // 以现存字根为准的勾选集合，避免字根删除后残留脏 id
+  const checkedIdSet = useMemo(() => {
+    const ids = new Set(radicals.map((r) => r.id));
+    return new Set(checkedIds.filter((id) => ids.has(id)));
+  }, [radicals, checkedIds]);
+
+  useEffect(() => {
+    if (checkedIdSet.size !== checkedIds.length) {
+      setCheckedIds([...checkedIdSet]);
+    }
+  }, [checkedIdSet, checkedIds.length]);
+
+  const toggleChecked = (id: string) => {
+    setCheckedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const clearChecked = () => setCheckedIds([]);
+
+  const filteredIds = filteredRadicals.map((r) => r.id);
+  const allFilteredChecked = filteredIds.length > 0 && filteredIds.every((id) => checkedIdSet.has(id));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredChecked) {
+      const filtered = new Set(filteredIds);
+      setCheckedIds((prev) => prev.filter((id) => !filtered.has(id)));
+    } else {
+      setCheckedIds((prev) => [...new Set([...prev, ...filteredIds])]);
+    }
+  };
+
+  const handleBatchCompose = () => {
+    checkedIds.forEach((id) => addToComposer(id));
+    clearChecked();
+    navigate('/composer');
+  };
+
   return (
     <div className="container mx-auto px-6 py-8">
       <div className="mb-8 animate-fade-up">
@@ -49,7 +86,7 @@ export const GlyphGridPage: React.FC = () => {
               字形库
             </h2>
             <p className="text-ink-300 font-song mt-2 text-sm">
-              共收录 <span className="text-vermilion-500 font-bold">{radicals.length}</span> 个字根 · 点击查看详情，双击编辑
+              共收录 <span className="text-vermilion-500 font-bold">{radicals.length}</span> 个字根 · 点击查看详情，双击编辑，勾选后可批量送入组合器
             </p>
           </div>
           <button
@@ -127,6 +164,7 @@ export const GlyphGridPage: React.FC = () => {
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-4">
               {filteredRadicals.map((r, idx) => {
                 const isSelected = r.id === selectedRadicalId;
+                const isChecked = checkedIdSet.has(r.id);
                 return (
                   <div
                     key={r.id}
@@ -134,11 +172,33 @@ export const GlyphGridPage: React.FC = () => {
                     onDoubleClick={() => navigate(`/editor/radical?id=${r.id}`)}
                     style={{ animationDelay: `${idx * 30}ms` }}
                     className={`group relative bg-parchment-50 rounded-2xl p-5 shadow-scroll border-2 cursor-pointer transition-all duration-300 hover:shadow-xl hover:-translate-y-1 animate-fade-up ${
-                      isSelected
+                      isChecked
+                        ? 'border-vermilion-500/70 ring-2 ring-vermilion-500/15'
+                        : isSelected
                         ? 'border-vermilion-500 shadow-seal ring-4 ring-vermilion-500/10'
                         : 'border-parchment-300/40 hover:border-vermilion-500/40'
                     }`}
                   >
+                    <div className="absolute top-3 left-3 z-10">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleChecked(r.id);
+                        }}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center border-2 transition-all shadow-sm ${
+                          isChecked
+                            ? 'bg-vermilion-500 border-vermilion-600 text-parchment-50 opacity-100'
+                            : 'bg-parchment-50/90 border-parchment-300/60 text-transparent opacity-0 group-hover:opacity-100 hover:border-vermilion-500/60'
+                        }`}
+                        title={isChecked ? '取消勾选' : '勾选'}
+                        aria-label={isChecked ? '取消勾选' : '勾选'}
+                        aria-pressed={isChecked}
+                      >
+                        <Check size={15} strokeWidth={3} />
+                      </button>
+                    </div>
+
                     <div className="absolute top-3 right-3">
                       <button
                         onClick={(e) => {
@@ -148,6 +208,7 @@ export const GlyphGridPage: React.FC = () => {
                           btn.classList.add('scale-110');
                           setTimeout(() => btn.classList.remove('scale-110'), 200);
                         }}
+                        onDoubleClick={(e) => e.stopPropagation()}
                         className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-lg bg-bronze-400 hover:bg-bronze-500 text-parchment-50 flex items-center justify-center shadow-md"
                         title="添加到组合器"
                       >
@@ -182,6 +243,44 @@ export const GlyphGridPage: React.FC = () => {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {checkedIds.length > 0 && (
+            <div className="sticky bottom-4 mt-6 animate-fade-up">
+              <div className="flex flex-wrap items-center gap-3 px-5 py-3.5 bg-ink-500/95 backdrop-blur-sm rounded-2xl shadow-seal border border-ink-400/40">
+                <div className="flex items-center gap-2 mr-2">
+                  <span className="min-w-[26px] h-[26px] px-1.5 rounded-full bg-vermilion-500 text-parchment-50 text-sm font-bold flex items-center justify-center">
+                    {checkedIds.length}
+                  </span>
+                  <span className="font-kai text-sm text-parchment-200">已勾选字根</span>
+                </div>
+
+                <button
+                  onClick={toggleSelectAllFiltered}
+                  disabled={filteredIds.length === 0}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-kai text-parchment-300 hover:text-parchment-50 hover:bg-white/10 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {allFilteredChecked ? <Square size={15} /> : <CheckSquare size={15} />}
+                  {allFilteredChecked ? '取消全选' : '全选当前'}
+                </button>
+
+                <button
+                  onClick={clearChecked}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-kai text-parchment-300 hover:text-vermilion-400 hover:bg-vermilion-500/10 transition-all"
+                >
+                  <Trash2 size={15} />
+                  清空选择
+                </button>
+
+                <button
+                  onClick={handleBatchCompose}
+                  className="ml-auto flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-kai bg-vermilion-500 hover:bg-vermilion-600 text-parchment-50 transition-all hover:scale-[1.02] active:scale-[0.98] shadow"
+                >
+                  <Layers size={16} />
+                  送入组合器（{checkedIds.length}）
+                </button>
+              </div>
             </div>
           )}
         </div>
