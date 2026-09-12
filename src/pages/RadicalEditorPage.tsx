@@ -1,12 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Save, Trash2, RefreshCw, Pen, Square, Circle, Eraser, X } from 'lucide-react';
+import { Save, Trash2, RefreshCw, Pen, Square, Circle, Eraser, X, Undo2, Redo2 } from 'lucide-react';
 import { useWritingSystemStore } from '@/store/useWritingSystemStore';
 import { ShapeRenderer } from '@/components/GlyphRenderer';
 import { CATEGORY_OPTIONS } from '@/utils/glyphUtils';
 import type { GlyphVariant, RadicalCategory } from '@/types';
 
 type Tool = 'pen' | 'rect' | 'circle' | 'eraser';
+
+type GlyphSnapshot = {
+  baseShape: string;
+  variants: GlyphVariant[];
+};
+
+const HISTORY_LIMIT = 50;
 
 export const RadicalEditorPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -37,6 +44,111 @@ export const RadicalEditorPage: React.FC = () => {
   const startPointRef = useRef<{ x: number; y: number } | null>(null);
   const pathsRef = useRef<string[]>([]);
 
+  // —— 撤销 / 重做：快照栈 ——
+  const [past, setPast] = useState<GlyphSnapshot[]>([]);
+  const [future, setFuture] = useState<GlyphSnapshot[]>([]);
+
+  const snapshot = useCallback(
+    (): GlyphSnapshot => ({ baseShape: currentBasePath, variants }),
+    [currentBasePath, variants]
+  );
+
+  const applySnapshot = useCallback((snap: GlyphSnapshot) => {
+    setCurrentBasePath(snap.baseShape);
+    setVariants(snap.variants.map((v) => ({ ...v })));
+  }, []);
+
+  // 提交一次字形改动：先把改动前的快照压入撤销栈
+  const commitGlyph = useCallback(
+    (nextBaseShape: string, nextVariants: GlyphVariant[]) => {
+      const prev = snapshot();
+      setPast((p) => {
+        const last = p[p.length - 1];
+        const sameAsLast =
+          last && last.baseShape === prev.baseShape && JSON.stringify(last.variants) === JSON.stringify(prev.variants);
+        return sameAsLast ? p : [...p.slice(-(HISTORY_LIMIT - 1)), prev];
+      });
+      setFuture([]);
+      setCurrentBasePath(nextBaseShape);
+      setVariants(nextVariants);
+    },
+    [snapshot]
+  );
+
+  // 对当前绘制目标（基础形状或某阶段变体）提交路径
+  const commitPath = useCallback(
+    (path: string) => {
+      if (drawingTarget === 'base') {
+        if (path === currentBasePath) return; // 空白起笔/清空但本来就是空的：不入栈
+        commitGlyph(path, variants);
+      } else {
+        const current = variants.find((v) => v.stageId === drawingTarget);
+        if (current?.svgPath === path) return;
+        const nextVariants = current
+          ? variants.map((v) => (v.stageId === drawingTarget ? { ...v, svgPath: path } : v))
+          : path
+          ? [...variants, { stageId: drawingTarget, svgPath: path }]
+          : variants;
+        commitGlyph(currentBasePath, nextVariants);
+      }
+    },
+    [drawingTarget, currentBasePath, variants, commitGlyph]
+  );
+
+  // 直接提交整组变体（复制基础形状、删除变体用）
+  const commitVariants = useCallback(
+    (nextVariants: GlyphVariant[]) => {
+      if (JSON.stringify(nextVariants) === JSON.stringify(variants)) return;
+      commitGlyph(currentBasePath, nextVariants);
+    },
+    [variants, currentBasePath, commitGlyph]
+  );
+
+  const undo = useCallback(() => {
+    if (past.length === 0) return;
+    const previous = past[past.length - 1];
+    setPast((p) => p.slice(0, -1));
+    setFuture((f) => [snapshot(), ...f].slice(0, HISTORY_LIMIT));
+    applySnapshot(previous);
+  }, [past, snapshot, applySnapshot]);
+
+  const redo = useCallback(() => {
+    if (future.length === 0) return;
+    const next = future[0];
+    setFuture((f) => f.slice(1));
+    setPast((p) => [...p.slice(-(HISTORY_LIMIT - 1)), snapshot()]);
+    applySnapshot(next);
+  }, [future, snapshot, applySnapshot]);
+
+  // 切换字根或保存后重置历史
+  const resetHistory = useCallback(() => {
+    setPast([]);
+    setFuture([]);
+  }, []);
+
+  // Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z（或 Ctrl+Y）重做
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.altKey) return;
+      const key = e.key.toLowerCase();
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (isDrawing) return;
+      if (key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (key === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [undo, redo, isDrawing]);
+
+
   useEffect(() => {
     if (editingRadical) {
       setName(editingRadical.name);
@@ -54,7 +166,8 @@ export const RadicalEditorPage: React.FC = () => {
       setVariants([]);
     }
     setActiveStageTab(null);
-  }, [editId, editingRadical?.id]);
+    resetHistory();
+  }, [editId, editingRadical?.id, resetHistory]);
 
   useEffect(() => {
     if (drawingTarget === 'base') {
@@ -70,22 +183,6 @@ export const RadicalEditorPage: React.FC = () => {
     if (drawingTarget === 'base') return currentBasePath;
     const v = variants.find((v) => v.stageId === drawingTarget);
     return v?.svgPath || '';
-  };
-
-  const setCurrentPathValue = (path: string) => {
-    if (drawingTarget === 'base') {
-      setCurrentBasePath(path);
-    } else {
-      setVariants((prev) => {
-        const exists = prev.find((v) => v.stageId === drawingTarget);
-        if (exists) {
-          return prev.map((v) =>
-            v.stageId === drawingTarget ? { ...v, svgPath: path } : v
-          );
-        }
-        return [...prev, { stageId: drawingTarget as string, svgPath: path }];
-      });
-    }
   };
 
   const getSvgPoint = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -111,7 +208,7 @@ export const RadicalEditorPage: React.FC = () => {
     } else if (tool === 'eraser') {
       pathsRef.current = [];
       setTempPath('');
-      setCurrentPathValue('');
+      commitPath('');
     }
   };
 
@@ -150,7 +247,7 @@ export const RadicalEditorPage: React.FC = () => {
     if (isDrawing && tempPath) {
       const final = [...pathsRef.current, tempPath].join(' ').trim();
       pathsRef.current = final ? [final] : [];
-      setCurrentPathValue(final);
+      commitPath(final);
     }
     setIsDrawing(false);
     setTempPath('');
@@ -160,22 +257,16 @@ export const RadicalEditorPage: React.FC = () => {
   const clearCurrent = () => {
     pathsRef.current = [];
     setTempPath('');
-    setCurrentPathValue('');
-  };
-
-  const saveToVariants = (stageId: string, path: string) => {
-    setVariants((prev) => {
-      const exists = prev.find((v) => v.stageId === stageId);
-      if (exists) {
-        return prev.map((v) => (v.stageId === stageId ? { ...v, svgPath: path } : v));
-      }
-      return [...prev, { stageId, svgPath: path }];
-    });
+    commitPath('');
   };
 
   const copyBaseToStage = (stageId: string) => {
     if (!currentBasePath) return;
-    saveToVariants(stageId, currentBasePath);
+    const existing = variants.find((v) => v.stageId === stageId);
+    const nextVariants = existing
+      ? variants.map((v) => (v.stageId === stageId ? { ...v, svgPath: currentBasePath } : v))
+      : [...variants, { stageId, svgPath: currentBasePath }];
+    commitVariants(nextVariants);
   };
 
   const handleSave = () => {
@@ -205,6 +296,7 @@ export const RadicalEditorPage: React.FC = () => {
       setCurrentBasePath('');
       setVariants([]);
     }
+    resetHistory();
     setTimeout(() => setSavedMsg(''), 2000);
   };
 
@@ -348,7 +440,7 @@ export const RadicalEditorPage: React.FC = () => {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              setVariants((prev) => prev.filter((vv) => vv.stageId !== st.id));
+                              commitVariants(variants.filter((vv) => vv.stageId !== st.id));
                             }}
                             className="p-1.5 rounded-lg text-vermilion-500/70 hover:bg-vermilion-500/10 hover:text-vermilion-500 transition-all"
                             title="删除此变体"
@@ -392,6 +484,23 @@ export const RadicalEditorPage: React.FC = () => {
                 )}
               </h3>
               <div className="flex items-center gap-1.5 bg-parchment-100/60 p-1.5 rounded-xl border border-parchment-300/30">
+                <button
+                  onClick={undo}
+                  disabled={past.length === 0 || isDrawing}
+                  title="撤销（Ctrl/⌘+Z）"
+                  className="p-2 rounded-lg text-ink-400 hover:text-vermilion-500 hover:bg-parchment-200/60 disabled:opacity-25 disabled:cursor-not-allowed disabled:hover:text-ink-400 disabled:hover:bg-transparent transition-all"
+                >
+                  <Undo2 size={16} />
+                </button>
+                <button
+                  onClick={redo}
+                  disabled={future.length === 0 || isDrawing}
+                  title="重做（Ctrl/⌘+Shift+Z）"
+                  className="p-2 rounded-lg text-ink-400 hover:text-vermilion-500 hover:bg-parchment-200/60 disabled:opacity-25 disabled:cursor-not-allowed disabled:hover:text-ink-400 disabled:hover:bg-transparent transition-all"
+                >
+                  <Redo2 size={16} />
+                </button>
+                <div className="w-px h-6 bg-parchment-300/50 mx-1" />
                 <ToolBtn active={tool === 'pen'} onClick={() => setTool('pen')} icon={<Pen size={16} />} label="画笔" />
                 <ToolBtn active={tool === 'rect'} onClick={() => setTool('rect')} icon={<Square size={16} />} label="矩形" />
                 <ToolBtn active={tool === 'circle'} onClick={() => setTool('circle')} icon={<Circle size={16} />} label="圆形" />
